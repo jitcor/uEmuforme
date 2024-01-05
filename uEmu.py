@@ -5,6 +5,7 @@
 #  Created by Alexander Hude on 26/07/17.
 #  Copyright (c) 2017 Alexander Hude. All rights reserved.
 #
+import pydevd_pycharm
 
 UEMU_USE_AS_SCRIPT      = True    # Set to `False` if you want to load uEmu automatically as IDA Plugin
 
@@ -856,11 +857,15 @@ class uEmuControlView(PluginForm):
         btnRun = QPushButton("Run")
         btnStep = QPushButton("Step")
         btnStop = QPushButton("Stop")
+        btnSetPC = QPushButton("SetPC")
+        btnShowMemRange = QPushButton("SMR")
 
         btnStart.clicked.connect(self.OnEmuStart)
         btnRun.clicked.connect(self.OnEmuRun)
         btnStep.clicked.connect(self.OnEmuStep)
         btnStop.clicked.connect(self.OnEmuStop)
+        btnSetPC.clicked.connect(self.OnEmuSetPC)
+        btnShowMemRange.clicked.connect(self.OnEmuShowMemRange)
 
         hbox = QHBoxLayout()
         hbox.setAlignment(QtCore.Qt.AlignCenter)
@@ -868,6 +873,8 @@ class uEmuControlView(PluginForm):
         hbox.addWidget(btnRun)
         hbox.addWidget(btnStep)
         hbox.addWidget(btnStop)
+        hbox.addWidget(btnSetPC)
+        hbox.addWidget(btnShowMemRange)
 
         self.parent.setLayout(hbox)
 
@@ -882,6 +889,12 @@ class uEmuControlView(PluginForm):
 
     def OnEmuStop(self, code=0):
         self.owner.emu_stop()
+
+    def OnEmuSetPC(self, code=0):
+        self.owner.set_pc()
+
+    def OnEmuShowMemRange(self, code=0):
+        self.owner.show_memory()
 
     def OnClose(self, form):
         self.owner.contol_view_closed()
@@ -903,7 +916,7 @@ class uEmuMappeduMemoryView(IDAAPI_Choose):
         self.items = memory
         self.icon = -1
         self.selcount = 0
-        self.popup_names = [ "", "Dump To File", "Show", "" ]
+        self.popup_names = [ "", "Dump To File", "Show","Unmap", "" ]
         self.owner = owner
 
     def OnClose(self):
@@ -1148,9 +1161,13 @@ class uEmuUnicornEngine(object):
        
         return uc_context
 
-    def set_context(self, context):
+    def set_context(self, context)->bool:
         # Looks like unicorn context is not serializable in python
         # self.mu.context_restore(context)
+
+        if not self.is_active():
+            uemu_log("Emulator is not active")
+            return False
 
         for reg in context["cpu"]:
             self.mu.reg_write(reg[0], reg[1])
@@ -1165,8 +1182,9 @@ class uEmuUnicornEngine(object):
                 memPerm = mem[2]
                 memData = mem[3]
                 uemu_log("  map [%X:%X]" % (memStart, memEnd))
+                # pydevd_pycharm.settrace('localhost', port=5070, stdoutToServer=True, stderrToServer=True)
                 self.mu.mem_map(memStart, memEnd - memStart + 1, memPerm)
-                self.mu.mem_write(memStart, str(memData))
+                self.mu.mem_write(memStart, bytes(memData))
             except UcError as e:
                 uemu_log("! <U> %s" % e)
 
@@ -1178,6 +1196,8 @@ class uEmuUnicornEngine(object):
                 self.trace_log()
 
             self.emuActive = True
+
+        return True
 
     def is_memory_mapped(self, address):
         try:
@@ -1737,10 +1757,9 @@ class uEmuPlugin(plugin_t, UI_Hooks):
             return
         with open(filePath, 'rb') as file:
             settings = pickle.load(file)
-            self.unicornEngine.set_context(pickle.load(file))
+            if self.unicornEngine.set_context(pickle.load(file)):
+                uemu_log("Project loaded from %s" % filePath)
             file.close()
-
-            uemu_log("Project loaded from %s" % filePath)
 
     def save_project(self):
         filePath = IDAAPI_AskFile(1, "*.emu", "Save FridaLink project")
@@ -1786,14 +1805,14 @@ class uEmuPlugin(plugin_t, UI_Hooks):
         self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":cpu_ext_view",      self.show_cpu_ext_context,  "Show CPU Extended Context",  "Show Extended Registers",   None,                   True    ))
         self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":stack_view",        self.show_stack_view,       "Show Stack View",            "Show Stack View",           None,                   True    ))
         self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":mem_view",          self.show_memory,           "Show Memory Range",          "Show Memory Range",         None,                   True    ))
-        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":mem_map",           self.show_mapped,           "Show Mapped Memory",         "Show Mapped Memory",        None,                   False   ))
-        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":fetch_segs",        self.fetch_segments,        "Fetch Segments",             "Fetch Segments",            None,                   False   ))
+        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":mem_map",           self.show_mapped,           "Show Mapped Memory",         "Show Mapped Memory",        None,                   True   ))
+        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":fetch_segs",        self.fetch_segments,        "Fetch Segments",             "Fetch Segments",            None,                   True   ))
         self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem("-",                                     self.do_nothing,            "",                           None,                        None,                   False   ))
-        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":load_prj",          self.load_project,          "Load Project",               "Load Project",              None,                   False   ))
-        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":save_prj",          self.save_project,          "Save Project",               "Save Project",              None,                   False   ))
-        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":settings",          self.show_settings,         "Settings",                   "Settings",                  None,                   False   ))
+        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":load_prj",          self.load_project,          "Load Project",               "Load Project",              None,                   True   ))
+        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":save_prj",          self.save_project,          "Save Project",               "Save Project",              None,                   True   ))
+        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":settings",          self.show_settings,         "Settings",                   "Settings",                  None,                   True   ))
         self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem("-",                                     self.do_nothing,            "",                           None,                        None,                   False   ))
-        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":unload",            self.unload_plugin,         "Unload Plugin",              "Unload Plugin",             None,                   False   ))
+        self.MENU_ITEMS.append(UEMU_HELPERS.MenuItem(self.plugin_name + ":unload",            self.unload_plugin,         "Unload Plugin",              "Unload Plugin",             None,                   True   ))
 
         for item in self.MENU_ITEMS:
             if item.action == "-":
@@ -1854,6 +1873,7 @@ class uEmuPlugin(plugin_t, UI_Hooks):
 
     def memory_view_closed(self, viewid):
         del self.memoryViews[viewid]
+        print("closed memory view:%d",viewid)
 
     def stack_view_closed(self):
         self.stackView = None
@@ -2039,6 +2059,7 @@ class uEmuPlugin(plugin_t, UI_Hooks):
                 self.memoryViews[mem_addr].SetContent(self.unicornEngine.mu)
             self.memoryViews[mem_addr].Show()
             self.memoryViews[mem_addr].Refresh()
+            print("view memory id:%d",mem_addr)
 
     def show_stack_view(self):
         if not self.unicornEngine.is_active():
@@ -2057,7 +2078,7 @@ class uEmuPlugin(plugin_t, UI_Hooks):
             uemu_log("Emulator is not active")
             return
 
-        mappeduEmuMemoryView = uEmuMappeduMemoryView(self, self.unicornEngine.get_mapped_memory())
+        mappeduEmuMemoryView = uEmuMappeduMemoryView(self, self.unicornEngine.get_mapped_memory(),embedded=True)
         mappeduEmuMemoryView.show()
 
     def fetch_segments(self):
@@ -2109,8 +2130,8 @@ class uEmuPlugin(plugin_t, UI_Hooks):
 def PLUGIN_ENTRY():
     return uEmuPlugin()
 
+print("UEMU_USE_AS_SCRIPT:",UEMU_USE_AS_SCRIPT)
 if UEMU_USE_AS_SCRIPT:
-    if __name__ == '__main__':
-        uEmu = uEmuPlugin()
-        uEmu.init()
-        uEmu.run()
+    uEmu = uEmuPlugin()
+    uEmu.init()
+    uEmu.run()
